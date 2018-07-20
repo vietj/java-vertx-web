@@ -1,11 +1,13 @@
 package io.opentracing.contrib.vertx.ext.web;
 
+import io.opentracing.Scope;
 import io.opentracing.contrib.vertx.ext.web.WebSpanDecorator.StandardTags;
+import io.vertx.core.Vertx;
+import io.vertx.core.impl.VertxInternal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import io.opentracing.Span;
 import io.opentracing.SpanContext;
 import io.opentracing.Tracer;
 import io.opentracing.propagation.Format;
@@ -50,13 +52,13 @@ public class TracingHandler implements Handler<RoutingContext> {
     protected void handlerNormal(RoutingContext routingContext) {
         // reroute
         Object object = routingContext.get(CURRENT_SPAN);
-        if (object instanceof Span) {
-            Span span = (Span) object;
+        if (object instanceof Scope) {
+            Scope scope = (Scope) object;
             decorators.forEach(spanDecorator ->
-                    spanDecorator.onReroute(routingContext.request(), span));
+                    spanDecorator.onReroute(routingContext.request(), scope.span()));
 
             // TODO in 3.3.3 it was sufficient to add this when creating the span
-            routingContext.addBodyEndHandler(finishEndHandler(routingContext, span));
+            routingContext.addBodyEndHandler(finishEndHandler(routingContext, scope));
             routingContext.next();
             return;
         }
@@ -64,38 +66,38 @@ public class TracingHandler implements Handler<RoutingContext> {
         SpanContext extractedContext = tracer.extract(Format.Builtin.HTTP_HEADERS,
                 new MultiMapExtractAdapter(routingContext.request().headers()));
 
-        Span span = tracer.buildSpan(routingContext.request().method().toString())
+        Scope scope = tracer.buildSpan(routingContext.request().method().toString())
                 .asChildOf(extractedContext)
                 .ignoreActiveSpan() // important since we are on event loop
                 .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_SERVER)
-                .startManual();
+                .startActive(false);
 
         decorators.forEach(spanDecorator ->
-                spanDecorator.onRequest(routingContext.request(), span));
+                spanDecorator.onRequest(routingContext.request(), scope.span()));
 
-        routingContext.put(CURRENT_SPAN, span);
+        routingContext.put(CURRENT_SPAN, scope);
         // TODO it's not guaranteed that body end handler is always called
         // https://github.com/vert-x3/vertx-web/issues/662
-        routingContext.addBodyEndHandler(finishEndHandler(routingContext, span));
+        routingContext.addBodyEndHandler(finishEndHandler(routingContext, scope));
         routingContext.next();
     }
 
     protected void handlerFailure(RoutingContext routingContext) {
         Object object = routingContext.get(CURRENT_SPAN);
-        if (object instanceof Span) {
-            final Span span = (Span)object;
+        if (object instanceof Scope) {
+            final Scope scope = (Scope)object;
             routingContext.addBodyEndHandler(event -> decorators.forEach(spanDecorator ->
-                    spanDecorator.onFailure(routingContext.failure(), routingContext.response(), span)));
+                    spanDecorator.onFailure(routingContext.failure(), routingContext.response(), scope.span())));
         }
 
         routingContext.next();
     }
 
-    private Handler<Void> finishEndHandler(RoutingContext routingContext, Span span) {
+    private Handler<Void> finishEndHandler(RoutingContext routingContext, Scope scope) {
         return handler -> {
             decorators.forEach(spanDecorator ->
-                    spanDecorator.onResponse(routingContext.request(), span));
-            span.finish();
+                    spanDecorator.onResponse(routingContext.request(), scope.span()));
+            tracer.activeSpan().finish();
         };
     }
 
@@ -109,9 +111,9 @@ public class TracingHandler implements Handler<RoutingContext> {
         SpanContext serverContext = null;
 
         Object object = routingContext.get(CURRENT_SPAN);
-        if (object instanceof Span) {
-            Span span = (Span) object;
-            serverContext = span.context();
+        if (object instanceof Scope) {
+            Scope scope = (Scope) object;
+            serverContext = scope.span().context();
         } else {
             log.error("Sever SpanContext is null or not an instance of SpanContext");
         }
