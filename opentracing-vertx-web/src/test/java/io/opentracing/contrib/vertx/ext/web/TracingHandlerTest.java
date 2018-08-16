@@ -7,6 +7,7 @@ import io.opentracing.mock.MockSpan;
 import io.opentracing.mock.MockSpan.MockContext;
 import io.opentracing.tag.Tags;
 import io.vertx.core.Handler;
+import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
@@ -19,6 +20,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import io.vertx.test.core.Repeat;
 import org.awaitility.Awaitility;
 import org.hamcrest.core.IsEqual;
 import org.junit.Assert;
@@ -31,6 +34,11 @@ import java.util.concurrent.CountDownLatch;
  * @author Pavol Loffay
  */
 public class TracingHandlerTest extends BaseTracingTest {
+
+    protected HttpClientOptions getHttpClientOptions() {
+        // Concurrent chaining test need more than 5 concurrent connections
+        return super.getHttpClientOptions().setMaxPoolSize(10);
+    }
 
     @Test
     public void testNoURLMapping() throws Exception {
@@ -400,8 +408,8 @@ public class TracingHandlerTest extends BaseTracingTest {
     }
 
     @Test
-    public void testMultiple() {
-        server.close();
+    public void testMultiple() throws Exception {
+        closeServer();
         server.requestHandler(request -> {
             assertServerSpanActive(request);
             request.response()
@@ -435,8 +443,8 @@ public class TracingHandlerTest extends BaseTracingTest {
     }
 
     @Test
-    public void testChaining() {
-        server.close();
+    public void testChaining() throws Exception {
+        closeServer();
         server.requestHandler(request -> {
             if (request.uri().contains("/hello")) {
                 request.response()
@@ -466,9 +474,15 @@ public class TracingHandlerTest extends BaseTracingTest {
         assertOneTrace(mockSpans);
     }
 
+    private void closeServer() throws Exception {
+        CountDownLatch latch = new CountDownLatch(1);
+        server.close(onSuccess(v -> latch.countDown()));
+        awaitLatch(latch);
+    }
+
     @Test
-    public void testChainingConcurrent() {
-        server.close();
+    public void testChainingConcurrent() throws Exception {
+        closeServer();
         server.requestHandler(request -> {
             if (request.uri().contains("/hello")) {
                 assertServerSpanActive(request);
@@ -478,28 +492,15 @@ public class TracingHandlerTest extends BaseTracingTest {
                     .end();
             } else if (request.uri().contains("/chaining")) {
                 assertServerSpanActive(request);
-                ExecutorService executorService = Executors.newFixedThreadPool(10);
-                final Span serverSpan = mockTracer.activeSpan();
                 AtomicInteger counter = new AtomicInteger(0);
                 int count = Integer.parseInt(request.params().get("count"));
                 for (int i = 0; i < count; i++) {
-                    executorService.submit(() -> {
-                        try (Scope scope = mockTracer.scopeManager().activate(serverSpan, false)) {
-                            HttpClientRequest req = client.get(8080, "localhost", "/hello", resp -> {
-                                if (counter.incrementAndGet() == count) {
-                                    try {
-                                        executorService.awaitTermination(1, TimeUnit.SECONDS);
-                                    } catch (InterruptedException e) {
-                                        e.printStackTrace();
-                                    }
-                                    executorService.shutdown();
-                                    request.response()
-                                        .setChunked(true)
-                                        .write("chaining\n")
-                                        .end();
-                                }
-                            });
-                            req.end();
+                    client.getNow(8080, "localhost", "/hello", resp -> {
+                        if (counter.incrementAndGet() == count) {
+                            request.response()
+                                .setChunked(true)
+                                .write("chaining\n")
+                                .end();
                         }
                     });
                 }
@@ -510,9 +511,10 @@ public class TracingHandlerTest extends BaseTracingTest {
         int count = 6;
         notTracedRequest("/chaining?count=" + count, HttpMethod.GET, 200);
 
-        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(reportedSpansSize(), IsEqual.equalTo(1 + count*2));
+        Awaitility.await().atMost(30, TimeUnit.SECONDS).until(reportedSpansSize(), IsEqual.equalTo(count * 2 + 1));
         List<MockSpan> mockSpans = mockTracer.finishedSpans();
         assertEquals(1 + count*2,  mockSpans.size());
+
         assertOneTrace(mockSpans);
 
         Map<Long, MockSpan> spanMap = mockSpans.stream()

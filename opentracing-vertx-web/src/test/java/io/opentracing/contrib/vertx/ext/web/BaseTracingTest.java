@@ -29,12 +29,13 @@ import org.junit.Before;
  */
 public class BaseTracingTest extends WebTestBase {
 
-  protected MockTracer mockTracer = new MockTracer();
+  protected MockTracer mockTracer;
   protected HttpClient notInstrumentedClient;
 
 
   @Override
   public void setUp() throws Exception {
+    mockTracer = new MockTracer();
     // just for debug GlobalTracer.get()..
     GlobalTracerTestUtil.resetGlobalTracer();
     GlobalTracer.register(mockTracer);

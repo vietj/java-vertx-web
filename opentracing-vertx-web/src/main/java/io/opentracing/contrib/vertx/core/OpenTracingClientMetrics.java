@@ -1,6 +1,6 @@
 package io.opentracing.contrib.vertx.core;
 
-import io.opentracing.Scope;
+import io.opentracing.Span;
 import io.opentracing.Tracer;
 import io.opentracing.contrib.vertx.ext.web.MultiMapInjectAdapter;
 import io.opentracing.propagation.Format.Builtin;
@@ -14,7 +14,7 @@ import io.vertx.core.spi.metrics.HttpClientMetrics;
 /**
  * @author Pavol Loffay
  */
-public class OpenTracingClientMetrics  implements HttpClientMetrics<Scope, String, String, Void, Void> {
+public class OpenTracingClientMetrics  implements HttpClientMetrics<Span, String, String, Void, Void> {
 
   private final Tracer tracer;
 
@@ -49,45 +49,45 @@ public class OpenTracingClientMetrics  implements HttpClientMetrics<Scope, Strin
   }
 
   @Override
-  public Scope requestBegin(Void endpointMetric, String socketMetric,
+  public Span requestBegin(Void endpointMetric, String socketMetric,
       SocketAddress localAddress, SocketAddress remoteAddress, HttpClientRequest request) {
-    Scope scope = tracer.buildSpan(request.method().name())
+    Span span = tracer.buildSpan(request.method().name())
         .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_CLIENT)
         .withTag(Tags.COMPONENT.getKey(), "vertx")
         .withTag(Tags.HTTP_METHOD.getKey(), request.method().name())
         .withTag(Tags.HTTP_URL.getKey(), request.absoluteURI())
-        .startActive(true);
-    tracer.inject(scope.span().context(), Builtin.HTTP_HEADERS, new MultiMapInjectAdapter(request.headers()));
-    return scope;
+        .start();
+    tracer.inject(span.context(), Builtin.HTTP_HEADERS, new MultiMapInjectAdapter(request.headers()));
+    return span;
   }
 
   @Override
-  public void requestEnd(Scope scope) {
-
-  }
-
-  @Override
-  public void responseBegin(Scope scope, HttpClientResponse response) {
+  public void requestEnd(Span scope) {
 
   }
 
   @Override
-  public Scope responsePushed(Void endpointMetric, String socketMetric,
+  public void responseBegin(Span scope, HttpClientResponse response) {
+
+  }
+
+  @Override
+  public Span responsePushed(Void endpointMetric, String socketMetric,
       SocketAddress localAddress, SocketAddress remoteAddress, HttpClientRequest request) {
     return null;
   }
 
   @Override
-  public void requestReset(Scope scope) {
+  public void requestReset(Span scope) {
 
   }
 
   @Override
-  public void responseEnd(Scope scope, HttpClientResponse response) {
+  public void responseEnd(Span span, HttpClientResponse response) {
     // Note that scope here is different to the scope created in #requestBegin because
     // instrumentation creates a new scope (with auto finish off)
-    Tags.HTTP_STATUS.set(scope.span(), response.statusCode());
-    scope.close();
+    Tags.HTTP_STATUS.set(span, response.statusCode());
+    span.finish();
   }
 
   @Override

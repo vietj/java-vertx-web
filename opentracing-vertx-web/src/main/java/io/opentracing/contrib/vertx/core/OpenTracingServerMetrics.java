@@ -1,7 +1,10 @@
 package io.opentracing.contrib.vertx.core;
 
 import io.opentracing.Scope;
+import io.opentracing.SpanContext;
 import io.opentracing.Tracer;
+import io.opentracing.contrib.vertx.ext.web.MultiMapInjectAdapter;
+import io.opentracing.propagation.Format;
 import io.opentracing.tag.Tags;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
@@ -9,6 +12,8 @@ import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.spi.metrics.HttpServerMetrics;
+
+import java.util.HashMap;
 
 /**
  * @author Pavol Loffay
@@ -23,13 +28,20 @@ public class OpenTracingServerMetrics implements HttpServerMetrics<Scope, Void, 
 
   @Override
   public Scope requestBegin(Void socketMetric, HttpServerRequest request) {
+    SpanContext ctx = tracer.extract(Format.Builtin.HTTP_HEADERS, new MultiMapInjectAdapter(request.headers()));
     Scope scope = tracer.buildSpan(request.method().name())
+        .asChildOf(ctx)
         .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_SERVER)
         .withTag(Tags.COMPONENT.getKey(), "vertx")
         .withTag(Tags.HTTP_METHOD.getKey(), request.method().name())
         .withTag(Tags.HTTP_URL.getKey(), request.absoluteURI())
-        .startActive(true);
+        .startActive(false);
     return scope;
+  }
+
+  @Override
+  public void afterRequestBegin(Scope requestMetric) {
+    requestMetric.close();
   }
 
   @Override
@@ -45,7 +57,7 @@ public class OpenTracingServerMetrics implements HttpServerMetrics<Scope, Void, 
   @Override
   public void responseEnd(Scope scope, HttpServerResponse response) {
     Tags.HTTP_STATUS.set(scope.span(), response.getStatusCode());
-    scope.close();
+    scope.span().finish();
   }
 
   @Override

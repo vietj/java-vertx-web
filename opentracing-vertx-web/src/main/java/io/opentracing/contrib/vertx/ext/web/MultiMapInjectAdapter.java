@@ -18,7 +18,7 @@ public class MultiMapInjectAdapter implements TextMap {
 
   @Override
   public Iterator<Entry<String, String>> iterator() {
-    throw new UnsupportedOperationException();
+    return multiMap.iterator();
   }
 
   @Override
